@@ -31,7 +31,7 @@ pub struct LazyCsvReader<'a> {
     skip_rows_after_header: usize,
     encoding: CsvEncoding,
     row_count: Option<RowCount>,
-    parse_dates: bool,
+    try_parse_dates: bool,
 }
 
 #[cfg(feature = "csv-file")]
@@ -58,7 +58,7 @@ impl<'a> LazyCsvReader<'a> {
             skip_rows_after_header: 0,
             encoding: CsvEncoding::Utf8,
             row_count: None,
-            parse_dates: false,
+            try_parse_dates: false,
         }
     }
 
@@ -193,8 +193,8 @@ impl<'a> LazyCsvReader<'a> {
 
     /// Automatically try to parse dates/ datetimes and time. If parsing fails, columns remain of dtype `[DataType::Utf8]`.
     #[cfg(feature = "temporal")]
-    pub fn with_parse_dates(mut self, toggle: bool) -> Self {
-        self.parse_dates = toggle;
+    pub fn with_try_parse_dates(mut self, toggle: bool) -> Self {
+        self.try_parse_dates = toggle;
         self
     }
 
@@ -205,19 +205,11 @@ impl<'a> LazyCsvReader<'a> {
     where
         F: Fn(Schema) -> PolarsResult<Schema>,
     {
-        let path;
-
         let mut file = if let Some(mut paths) = self.glob()? {
-            match paths.next() {
-                Some(globresult) => {
-                    path = globresult?;
-                }
-                None => {
-                    return Err(PolarsError::ComputeError(
-                        "globbing pattern did not match any files".into(),
-                    ));
-                }
-            }
+            let path = match paths.next() {
+                Some(globresult) => globresult?,
+                None => polars_bail!(ComputeError: "globbing pattern did not match any files"),
+            };
             std::fs::File::open(&path)
         } else {
             std::fs::File::open(&self.path)
@@ -238,7 +230,7 @@ impl<'a> LazyCsvReader<'a> {
             self.quote_char,
             self.eol_char,
             None,
-            self.parse_dates,
+            self.try_parse_dates,
         )?;
         let mut schema = f(schema)?;
 
@@ -275,7 +267,7 @@ impl LazyFileListReader for LazyCsvReader<'_> {
             self.skip_rows_after_header,
             self.encoding,
             self.row_count,
-            self.parse_dates,
+            self.try_parse_dates,
         )?
         .build()
         .into();
@@ -301,6 +293,17 @@ impl LazyFileListReader for LazyCsvReader<'_> {
     fn with_rechunk(mut self, toggle: bool) -> Self {
         self.rechunk = toggle;
         self
+    }
+
+    /// Try to stop parsing when `n` rows are parsed. During multithreaded parsing the upper bound `n` cannot
+    /// be guaranteed.
+    fn n_rows(&self) -> Option<usize> {
+        self.n_rows
+    }
+
+    /// Add a `row_count` column.
+    fn row_count(&self) -> Option<&RowCount> {
+        self.row_count.as_ref()
     }
 
     fn concat_impl(&self, lfs: Vec<LazyFrame>) -> PolarsResult<LazyFrame> {

@@ -245,6 +245,7 @@
 //!     - `unique_counts` - Count unique values in expressions.
 //!     - `log` - Logarithms for `Series`.
 //!     - `list_to_struct` - Convert `List` to `Struct` dtypes.
+//!     - `list_count` - Count elements in lists.
 //!     - `list_eval` - Apply expressions over list elements.
 //!     - `cumulative_eval` - Apply expressions over cumulatively increasing windows.
 //!     - `arg_where` - Get indices where condition holds.
@@ -279,7 +280,6 @@
 //! | UInt16                  | dtype-u16         |
 //! | Categorical             | dtype-categorical |
 //! | Struct                  | dtype-struct      |
-//! | Binary                  | dtype-binary      |
 //!
 //!
 //! Or you can choose on of the preconfigured pre-sets.
@@ -353,7 +353,7 @@
 //! * `POLARS_FMT_TABLE_INLINE_COLUMN_DATA_TYPE` -> put column data type on the same line as the column name.
 //! * `POLARS_FMT_TABLE_ROUNDED_CORNERS` -> apply rounded corners to UTF8-styled tables.
 //! * `POLARS_FMT_MAX_COLS` -> maximum number of columns shown when formatting DataFrames.
-//! * `POLARS_FMT_MAX_ROWS` -> maximum number of rows shown when formatting DataFrames.
+//! * `POLARS_FMT_MAX_ROWS` -> maximum number of rows shown when formatting DataFrames, `-1` to show all.
 //! * `POLARS_FMT_STR_LEN` -> maximum number of characters printed per string value.
 //! * `POLARS_TABLE_WIDTH` -> width of the tables used during DataFrame formatting.
 //! * `POLARS_MAX_THREADS` -> maximum number of threads used to initialize thread pool (on startup).
@@ -375,6 +375,7 @@
 //! ## User Guide
 //! If you want to read more, [check the User Guide](https://pola-rs.github.io/polars-book/).
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![allow(ambiguous_glob_reexports)]
 pub mod docs;
 pub mod export;
 pub mod prelude;
@@ -386,7 +387,7 @@ pub use polars_core::{
     series, testing,
 };
 #[cfg(feature = "dtype-categorical")]
-pub use polars_core::{toggle_string_cache, using_string_cache};
+pub use polars_core::{enable_string_cache, using_string_cache};
 #[cfg(feature = "polars-io")]
 pub use polars_io as io;
 #[cfg(feature = "lazy")]

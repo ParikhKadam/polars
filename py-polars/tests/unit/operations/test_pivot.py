@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import polars as pl
+from polars.exceptions import ComputeError
 from polars.testing import assert_frame_equal
 
 if TYPE_CHECKING:
-    from polars.internals.type_aliases import PivotAgg
+    from polars.type_aliases import PivotAgg
 
 
 def test_pivot() -> None:
@@ -20,7 +21,7 @@ def test_pivot() -> None:
             "bar": ["k", "l", "m", "n", "o"],
         }
     )
-    result = df.pivot(values="N", index="foo", columns="bar")
+    result = df.pivot(values="N", index="foo", columns="bar", aggregate_function=None)
 
     expected = pl.DataFrame(
         [
@@ -44,7 +45,9 @@ def test_pivot_list() -> None:
             "3": [None, None, [3, 3]],
         }
     )
-    out = df.pivot("b", index="a", columns="a", aggregate_fn="first", sort_columns=True)
+    out = df.pivot(
+        "b", index="a", columns="a", aggregate_function="first", sort_columns=True
+    )
     assert_frame_equal(out, expected)
 
 
@@ -69,7 +72,7 @@ def test_pivot_aggregate(agg_fn: PivotAgg, expected_rows: list[tuple[Any]]) -> N
         }
     )
     result = df.pivot(
-        values="c", index="b", columns="a", aggregate_fn=agg_fn, sort_columns=True
+        values="c", index="b", columns="a", aggregate_function=agg_fn, sort_columns=True
     )
     assert result.rows() == expected_rows
 
@@ -98,12 +101,14 @@ def test_pivot_categorical_index() -> None:
         schema=[("A", pl.Categorical), ("B", pl.Categorical)],
     )
 
-    result = df.pivot(values="B", index=["A"], columns="B", aggregate_fn="count")
+    result = df.pivot(values="B", index=["A"], columns="B", aggregate_function="count")
     expected = {"A": ["Fire", "Water"], "Car": [1, 2], "Ship": [1, None]}
     assert result.to_dict(False) == expected
 
     # test expression dispatch
-    result = df.pivot(values="B", index=["A"], columns="B", aggregate_fn=pl.count())
+    result = df.pivot(
+        values="B", index=["A"], columns="B", aggregate_function=pl.count()
+    )
     assert result.to_dict(False) == expected
 
     df = pl.DataFrame(
@@ -114,7 +119,9 @@ def test_pivot_categorical_index() -> None:
         },
         schema=[("A", pl.Categorical), ("B", pl.Categorical), ("C", pl.Categorical)],
     )
-    result = df.pivot(values="B", index=["A", "C"], columns="B", aggregate_fn="count")
+    result = df.pivot(
+        values="B", index=["A", "C"], columns="B", aggregate_function="count"
+    )
     expected = {
         "A": ["Fire", "Water"],
         "C": ["Paper", "Paper"],
@@ -133,15 +140,48 @@ def test_pivot_multiple_values_column_names_5116() -> None:
             "c2": ["C", "C", "D", "D"] * 2,
         }
     )
-    result = df.pivot(values=["x1", "x2"], index="c1", columns="c2", separator="|")
+
+    with pytest.raises(ComputeError, match="found multiple elements in the same group"):
+        df.pivot(
+            values=["x1", "x2"],
+            index="c1",
+            columns="c2",
+            separator="|",
+            aggregate_function=None,
+        )
+
+    result = df.pivot(
+        values=["x1", "x2"],
+        index="c1",
+        columns="c2",
+        separator="|",
+        aggregate_function="first",
+    )
     expected = {
         "c1": ["A", "B"],
-        "x1|C": [1, 2],
-        "x1|D": [3, 4],
-        "x2|C": [8, 7],
-        "x2|D": [6, 5],
+        "x1|c2|C": [1, 2],
+        "x1|c2|D": [3, 4],
+        "x2|c2|C": [8, 7],
+        "x2|c2|D": [6, 5],
     }
     assert result.to_dict(False) == expected
+
+
+def test_pivot_duplicate_names_7731() -> None:
+    df = pl.DataFrame(
+        {"a": [1, 4], "b": [1, 2], "c": ["x", "x"], "d": [7, 8], "e": ["x", "y"]}
+    )
+    assert df.pivot(
+        values=["a", "d"], index="b", columns=["c", "e"], aggregate_function="first"
+    ).to_dict(False) == {
+        "b": [1, 2],
+        "a_c_x": [1, 4],
+        "d_c_x": [7, 8],
+        "a_e_x": [1, None],
+        "a_e_y": [None, 4],
+        "d_e_x": [7, None],
+        "d_e_y": [None, 8],
+    }
 
 
 def test_pivot_floats() -> None:
@@ -154,7 +194,14 @@ def test_pivot_floats() -> None:
         }
     )
 
-    result = df.pivot(values="price", index="weight", columns="quantity")
+    with pytest.raises(ComputeError, match="found multiple elements in the same group"):
+        result = df.pivot(
+            values="price", index="weight", columns="quantity", aggregate_function=None
+        )
+
+    result = df.pivot(
+        values="price", index="weight", columns="quantity", aggregate_function="first"
+    )
     expected = {
         "weight": [1.0, 4.4, 8.8],
         "1.0": [1.0, 3.0, 5.0],
@@ -163,7 +210,12 @@ def test_pivot_floats() -> None:
     }
     assert result.to_dict(False) == expected
 
-    result = df.pivot(values="price", index=["article", "weight"], columns="quantity")
+    result = df.pivot(
+        values="price",
+        index=["article", "weight"],
+        columns="quantity",
+        aggregate_function=None,
+    )
     expected = {
         "article": ["a", "a", "b", "b"],
         "weight": [1.0, 4.4, 1.0, 8.8],
@@ -184,7 +236,7 @@ def test_pivot_reinterpret_5907() -> None:
     )
 
     result = df.pivot(
-        index=["A"], values=["C"], columns=["B"], aggregate_fn=pl.element().sum()
+        index=["A"], values=["C"], columns=["B"], aggregate_function=pl.element().sum()
     )
     expected = {"A": [3, -2], "x": [100, 50], "y": [500, -80]}
     assert result.to_dict(False) == expected
@@ -195,7 +247,7 @@ def test_pivot_subclassed_df() -> None:
         pass
 
     df = SubClassedDataFrame({"a": [1, 2], "b": [3, 4]})
-    result = df.pivot(values="b", index="a", columns="a", aggregate_fn="first")
+    result = df.pivot(values="b", index="a", columns="a", aggregate_function="first")
     assert isinstance(result, SubClassedDataFrame)
 
 
@@ -209,7 +261,9 @@ def test_pivot_temporal_logical_types() -> None:
             "value": [0] * 8,
         }
     )
-    assert df.pivot(index="idx", columns="foo", values="value").to_dict(False) == {
+    assert df.pivot(
+        index="idx", columns="foo", values="value", aggregate_function=None
+    ).to_dict(False) == {
         "idx": [
             datetime(1977, 1, 1, 0, 0),
             datetime(1978, 1, 1, 0, 0),
@@ -222,4 +276,70 @@ def test_pivot_temporal_logical_types() -> None:
         ],
         "a": [0, 0, 0, None, None, None, None, None],
         "b": [None, None, None, 0, 0, 0, 0, 0],
+    }
+
+
+def test_pivot_negative_duration() -> None:
+    df1 = pl.DataFrame({"root": [date(2020, i, 15) for i in (1, 2)]})
+    df2 = pl.DataFrame({"delta": [timedelta(days=i) for i in (-2, -1, 0, 1)]})
+
+    df = df1.join(df2, how="cross").with_columns(
+        [pl.Series(name="value", values=range(len(df1) * len(df2)))]
+    )
+    assert df.pivot(
+        index="delta", columns="root", values="value", aggregate_function=None
+    ).to_dict(False) == {
+        "delta": [
+            timedelta(days=-2),
+            timedelta(days=-1),
+            timedelta(0),
+            timedelta(days=1),
+        ],
+        "2020-01-15": [0, 1, 2, 3],
+        "2020-02-15": [4, 5, 6, 7],
+    }
+
+
+def test_aggregate_function_deprecation_warning() -> None:
+    df = pl.DataFrame({"a": [1, 2], "b": ["foo", "foo"], "c": ["x", "x"]})
+    with pytest.warns(
+        DeprecationWarning,
+        match="the default `aggregate_function` will change from `'first'` to `None`",
+    ):
+        df.pivot("a", "b", "c")
+
+
+def test_pivot_struct() -> None:
+    data = {
+        "id": ["a", "a", "b", "c", "c", "c"],
+        "week": ["1", "2", "3", "4", "3", "1"],
+        "num1": [1, 3, 5, 4, 3, 6],
+        "num2": [4, 5, 3, 4, 6, 6],
+    }
+    df = pl.DataFrame(data).with_columns(nums=pl.struct(["num1", "num2"]))
+
+    assert df.pivot(
+        values="nums", index="id", columns="week", aggregate_function="first"
+    ).to_dict(False) == {
+        "id": ["a", "b", "c"],
+        "1": [
+            {"num1": 1, "num2": 4},
+            {"num1": None, "num2": None},
+            {"num1": 6, "num2": 6},
+        ],
+        "2": [
+            {"num1": 3, "num2": 5},
+            {"num1": None, "num2": None},
+            {"num1": None, "num2": None},
+        ],
+        "3": [
+            {"num1": None, "num2": None},
+            {"num1": 5, "num2": 3},
+            {"num1": 3, "num2": 6},
+        ],
+        "4": [
+            {"num1": None, "num2": None},
+            {"num1": None, "num2": None},
+            {"num1": 4, "num2": 4},
+        ],
     }

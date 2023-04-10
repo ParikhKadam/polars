@@ -52,13 +52,11 @@ pub(crate) fn create_physical_expr(
                     apply_columns.push(Arc::from("count"))
                 } else {
                     let e = node_to_expr(function, expr_arena);
-                    return Err(PolarsError::ComputeError(
-                        format!(
-                            "Cannot apply a window function, did not find a root column. \
-                        This is likely due to a syntax error in this expression: {e:?}",
-                        )
-                        .into(),
-                    ));
+                    polars_bail!(
+                        ComputeError:
+                        "cannot apply a window function, did not find a root column; \
+                        this is likely due to a syntax error in this expression: {:?}", e
+                    );
                 }
             }
 
@@ -114,13 +112,17 @@ pub(crate) fn create_physical_expr(
                 expr: node_to_expr(expression, expr_arena),
             }))
         }
-        SortBy { expr, by, reverse } => {
+        SortBy {
+            expr,
+            by,
+            descending,
+        } => {
             let phys_expr = create_physical_expr(expr, ctxt, expr_arena, schema)?;
             let phys_by = create_physical_expressions(&by, ctxt, expr_arena, schema)?;
             Ok(Arc::new(SortByExpr::new(
                 phys_expr,
                 phys_by,
-                reverse,
+                descending,
                 node_to_expr(expression, expr_arena),
             )))
         }

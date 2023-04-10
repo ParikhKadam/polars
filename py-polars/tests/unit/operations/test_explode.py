@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 
 import polars as pl
 from polars.testing import assert_frame_equal, assert_series_equal
@@ -12,6 +13,14 @@ def test_explode_string() -> None:
 
     expected = pl.Series("a", ["H", "e", "l", "l", "o", "W", "o", "r", "l", "d"])
     assert_series_equal(result, expected)
+
+
+def test_explode_multiple() -> None:
+    df = pl.DataFrame({"a": [[1, 2], [3, 4]], "b": [[5, 6], [7, 8]]})
+
+    expected = pl.DataFrame({"a": [1, 2, 3, 4], "b": [5, 6, 7, 8]})
+    assert_frame_equal(df.explode(["a", "b"]), expected)
+    assert_frame_equal(df.explode("a", "b"), expected)
 
 
 def test_groupby_flatten_list() -> None:
@@ -241,3 +250,32 @@ def test_list_struct_explode_6905() -> None:
         {"params": [1]},
         {"params": []},
     ]
+
+
+def test_explode_binary() -> None:
+    assert pl.Series([[1, 2], [3]]).cast(
+        pl.List(pl.Binary)
+    ).arr.explode().to_list() == [
+        b"1",
+        b"2",
+        b"3",
+    ]
+
+
+def test_explode_null_list() -> None:
+    assert pl.Series([["a"], None], dtype=pl.List(pl.Utf8))[
+        1:2
+    ].arr.min().to_list() == [None]
+
+
+def test_explode_invalid_element_count() -> None:
+    df = pl.DataFrame(
+        {
+            "col1": [["X", "Y", "Z"], ["F", "G"], ["P"]],
+            "col2": [["A", "B", "C"], ["C"], ["D", "E"]],
+        }
+    ).with_row_count()
+    with pytest.raises(
+        pl.ShapeError, match=r"exploded columns must have matching element counts"
+    ):
+        df.explode(["col1", "col2"])

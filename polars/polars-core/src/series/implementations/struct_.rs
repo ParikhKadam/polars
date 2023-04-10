@@ -1,6 +1,7 @@
 use std::any::Any;
 
 use super::*;
+use crate::hashing::series_to_hashes;
 use crate::prelude::*;
 use crate::series::private::{PrivateSeries, PrivateSeriesNumeric};
 
@@ -63,6 +64,18 @@ impl private::PrivateSeries for SeriesWrap<StructChunked> {
             .unwrap();
         Ok(gb.take_groups())
     }
+
+    fn vec_hash(&self, random_state: RandomState, buf: &mut Vec<u64>) -> PolarsResult<()> {
+        series_to_hashes(self.0.fields(), Some(random_state), buf)?;
+        Ok(())
+    }
+
+    fn vec_hash_combine(&self, build_hasher: RandomState, hashes: &mut [u64]) -> PolarsResult<()> {
+        for field in self.0.fields() {
+            field.vec_hash_combine(build_hasher.clone(), hashes)?;
+        }
+        Ok(())
+    }
 }
 
 impl SeriesTrait for SeriesWrap<StructChunked> {
@@ -104,40 +117,52 @@ impl SeriesTrait for SeriesWrap<StructChunked> {
     /// When offset is negative the offset is counted from the
     /// end of the array
     fn slice(&self, offset: i64, length: usize) -> Series {
-        self.0
-            .apply_fields(|s| s.slice(offset, length))
-            .into_series()
+        let mut out = self.0.apply_fields(|s| s.slice(offset, length));
+        out.update_chunks(0);
+        out.into_series()
     }
 
     fn append(&mut self, other: &Series) -> PolarsResult<()> {
         let other = other.struct_()?;
-        let offset = self.chunks().len();
-
-        for (lhs, rhs) in self.0.fields_mut().iter_mut().zip(other.fields()) {
-            let lhs_name = lhs.name();
-            let rhs_name = rhs.name();
-            if lhs_name != rhs_name {
-                return Err(PolarsError::SchemaMisMatch(format!("cannot append field with name: {rhs_name} to struct with field name: {lhs_name}, please check your schema").into()));
+        if self.is_empty() {
+            self.0 = other.clone();
+            Ok(())
+        } else if other.is_empty() {
+            Ok(())
+        } else {
+            let offset = self.chunks().len();
+            for (lhs, rhs) in self.0.fields_mut().iter_mut().zip(other.fields()) {
+                polars_ensure!(
+                    lhs.name() == rhs.name(), SchemaMismatch:
+                    "cannot append field with name {:?} to struct with field name {:?}",
+                    rhs.name(), lhs.name(),
+                );
+                lhs.append(rhs)?;
             }
-            lhs.append(rhs)?;
+            self.0.update_chunks(offset);
+            Ok(())
         }
-        self.0.update_chunks(offset);
-        Ok(())
     }
 
     fn extend(&mut self, other: &Series) -> PolarsResult<()> {
         let other = other.struct_()?;
-
-        for (lhs, rhs) in self.0.fields_mut().iter_mut().zip(other.fields()) {
-            let lhs_name = lhs.name();
-            let rhs_name = rhs.name();
-            if lhs_name != rhs_name {
-                return Err(PolarsError::SchemaMisMatch(format!("cannot extend field with name: {rhs_name} to struct with field name: {lhs_name}, please check your schema").into()));
+        if self.is_empty() {
+            self.0 = other.clone();
+            Ok(())
+        } else if other.is_empty() {
+            Ok(())
+        } else {
+            for (lhs, rhs) in self.0.fields_mut().iter_mut().zip(other.fields()) {
+                polars_ensure!(
+                    lhs.name() == rhs.name(), SchemaMismatch:
+                    "cannot extend field with name {:?} to struct with field name {:?}",
+                    rhs.name(), lhs.name(),
+                );
+                lhs.extend(rhs)?;
             }
-            lhs.extend(rhs)?;
+            self.0.update_chunks(0);
+            Ok(())
         }
-        self.0.update_chunks(0);
-        Ok(())
     }
 
     /// Filter by boolean mask. This operation clones data.
@@ -250,41 +275,7 @@ impl SeriesTrait for SeriesWrap<StructChunked> {
 
     /// Count the null values.
     fn null_count(&self) -> usize {
-        if self
-            .0
-            .fields()
-            .iter()
-            .map(|s| s.null_count())
-            .sum::<usize>()
-            > 0
-        {
-            let mut null_count = 0;
-
-            let chunks_lens = self.0.fields()[0].chunks().len();
-
-            for i in 0..chunks_lens {
-                // If all fields are null we count it as null
-                // so we bitand every chunk
-                let mut validity_agg = None;
-
-                for s in self.0.fields() {
-                    let arr = &s.chunks()[i];
-
-                    match (&validity_agg, arr.validity()) {
-                        (Some(agg), Some(validity)) => validity_agg = Some(validity.bitand(agg)),
-                        (None, Some(validity)) => validity_agg = Some(validity.clone()),
-                        _ => {}
-                    }
-                    if let Some(validity) = &validity_agg {
-                        null_count += validity.unset_bits()
-                    }
-                }
-            }
-
-            null_count
-        } else {
-            0
-        }
+        self.0.null_count()
     }
 
     /// Get unique values in the Series.
@@ -349,5 +340,29 @@ impl SeriesTrait for SeriesWrap<StructChunked> {
 
     fn as_any(&self) -> &dyn Any {
         &self.0
+    }
+
+    fn sort_with(&self, options: SortOptions) -> Series {
+        let df = self.0.clone().unnest();
+
+        let desc = if options.descending {
+            vec![true; df.width()]
+        } else {
+            vec![false; df.width()]
+        };
+        let out = df
+            .sort_impl(
+                df.columns.clone(),
+                desc,
+                options.nulls_last,
+                None,
+                options.multithreaded,
+            )
+            .unwrap();
+        StructChunked::new_unchecked(self.name(), &out.columns).into_series()
+    }
+
+    fn arg_sort(&self, options: SortOptions) -> IdxCa {
+        self.0.arg_sort(options)
     }
 }

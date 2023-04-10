@@ -33,7 +33,6 @@ impl FunctionExpr {
             Ok(fld)
         };
 
-        #[cfg(any(feature = "rolling_window", feature = "trigonometry", feature = "log"))]
         // set float supertype
         let float_dtype = || {
             map_dtype(&|dtype| match dtype {
@@ -98,9 +97,7 @@ impl FunctionExpr {
                 if let DataType::Datetime(tu, _) = dt {
                     Ok(DataType::Datetime(*tu, tz.cloned()))
                 } else {
-                    Err(PolarsError::SchemaMisMatch(
-                        format!("expected Datetime got {dt:?}").into(),
-                    ))
+                    polars_bail!(op = "cast-timezone", got = dt, expected = "Datetime");
                 }
             })
         };
@@ -108,7 +105,7 @@ impl FunctionExpr {
         use FunctionExpr::*;
         match self {
             NullCount => with_dtype(IDX_DTYPE),
-            Pow => super_type(),
+            Pow => float_dtype(),
             Coalesce => super_type(),
             #[cfg(feature = "row_hash")]
             Hash(..) => with_dtype(DataType::UInt64),
@@ -143,7 +140,6 @@ impl FunctionExpr {
                     FromRadix { .. } => with_dtype(DataType::Int32),
                 }
             }
-            #[cfg(feature = "dtype-binary")]
             BinaryExpr(s) => {
                 use BinaryFunction::*;
                 match s {
@@ -158,6 +154,13 @@ impl FunctionExpr {
                     Month | Quarter | Week | WeekDay | Day | OrdinalDay | Hour | Minute
                     | Millisecond | Microsecond | Nanosecond | Second => DataType::UInt32,
                     TimeStamp(_) => DataType::Int64,
+                    IsLeapYear => DataType::Boolean,
+                    Time => DataType::Time,
+                    Date => DataType::Date,
+                    Datetime => match same_type().unwrap().dtype {
+                        DataType::Datetime(tu, _) => DataType::Datetime(tu, None),
+                        dtype => polars_bail!(ComputeError: "expected Datetime, got {}", dtype),
+                    },
                     Truncate(..) => same_type().unwrap().dtype,
                     Round(..) => same_type().unwrap().dtype,
                     #[cfg(feature = "timezones")]
@@ -193,6 +196,20 @@ impl FunctionExpr {
                     Get => inner_type_list(),
                     #[cfg(feature = "list_take")]
                     Take(_) => same_type(),
+                    #[cfg(feature = "list_count")]
+                    CountMatch => with_dtype(IDX_DTYPE),
+                    Sum => {
+                        let mut first = fields[0].clone();
+                        use DataType::*;
+                        let dt = first.data_type().inner_dtype().cloned().unwrap_or(Unknown);
+
+                        if matches!(dt, UInt8 | Int8 | Int16 | UInt16) {
+                            first.coerce(Int64);
+                        } else {
+                            first.coerce(dt);
+                        }
+                        Ok(first)
+                    }
                 }
             }
             #[cfg(feature = "dtype-struct")]
@@ -202,27 +219,21 @@ impl FunctionExpr {
                 match s {
                     FieldByIndex(index) => {
                         let (index, _) = slice_offsets(*index, 0, fields.len());
-                        fields.get(index).cloned().ok_or_else(|| {
-                            PolarsError::ComputeError(
-                                "index out of bounds in 'struct.field'".into(),
-                            )
-                        })
+                        fields.get(index).cloned().ok_or_else(
+                            || polars_err!(ComputeError: "index out of bounds in `struct.field`"),
+                        )
                     }
                     FieldByName(name) => {
                         if let DataType::Struct(flds) = &fields[0].dtype {
                             let fld = flds
                                 .iter()
                                 .find(|fld| fld.name() == name.as_ref())
-                                .ok_or_else(|| {
-                                    PolarsError::StructFieldNotFound(
-                                        name.as_ref().to_string().into(),
-                                    )
-                                })?;
+                                .ok_or_else(
+                                    || polars_err!(StructFieldNotFound: "{}", name.as_ref()),
+                                )?;
                             Ok(fld.clone())
                         } else {
-                            Err(PolarsError::StructFieldNotFound(
-                                name.as_ref().to_string().into(),
-                            ))
+                            polars_bail!(StructFieldNotFound: "{}", name.as_ref());
                         }
                     }
                 }
@@ -243,7 +254,7 @@ impl FunctionExpr {
                 DataType::Time => DataType::Duration(TimeUnit::Nanoseconds),
                 DataType::UInt64 | DataType::UInt32 => DataType::Int64,
                 DataType::UInt16 => DataType::Int32,
-                DataType::UInt8 => DataType::Int8,
+                DataType::UInt8 => DataType::Int16,
                 dt => dt.clone(),
             }),
             #[cfg(feature = "interpolate")]

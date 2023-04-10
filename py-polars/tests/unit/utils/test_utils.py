@@ -2,33 +2,37 @@ from __future__ import annotations
 
 import inspect
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import polars as pl
-from polars.utils import (
+from polars.utils.convert import (
     _date_to_pl_date,
     _datetime_to_pl_timestamp,
     _time_to_pl_time,
+    _timedelta_to_pl_duration,
     _timedelta_to_pl_timedelta,
-    deprecate_nonkeyword_arguments,
 )
+from polars.utils.decorators import deprecate_nonkeyword_arguments
+from polars.utils.various import parse_version
 
 if TYPE_CHECKING:
-    from polars.internals.type_aliases import TimeUnit
+    from polars.type_aliases import TimeUnit
 
 
 @pytest.mark.parametrize(
-    ("dt", "tu", "expected"),
+    ("dt", "time_unit", "expected"),
     [
         (datetime(2121, 1, 1), "ns", 4765132800000000000),
         (datetime(2121, 1, 1), "us", 4765132800000000),
         (datetime(2121, 1, 1), "ms", 4765132800000),
     ],
 )
-def test_datetime_to_pl_timestamp(dt: datetime, tu: TimeUnit, expected: int) -> None:
-    out = _datetime_to_pl_timestamp(dt, tu)
+def test_datetime_to_pl_timestamp(
+    dt: datetime, time_unit: TimeUnit, expected: int
+) -> None:
+    out = _datetime_to_pl_timestamp(dt, time_unit)
     assert out == expected
 
 
@@ -58,8 +62,28 @@ def test_timedelta_to_pl_timedelta() -> None:
     assert out == 86_400_000_000
     out = _timedelta_to_pl_timedelta(timedelta(days=1), "ms")
     assert out == 86_400_000
-    out = _timedelta_to_pl_timedelta(timedelta(days=1), tu=None)
+    out = _timedelta_to_pl_timedelta(timedelta(days=1), time_unit=None)
     assert out == 86_400_000_000
+
+
+@pytest.mark.parametrize(
+    ("td", "expected"),
+    [
+        (timedelta(days=1), "1d"),
+        (timedelta(days=-1), "-1d"),
+        (timedelta(seconds=1), "1s"),
+        (timedelta(seconds=-1), "-1s"),
+        (timedelta(microseconds=1), "1us"),
+        (timedelta(microseconds=-1), "-1us"),
+        (timedelta(days=1, seconds=1), "1d1s"),
+        (timedelta(days=-1, seconds=-1), "-1d1s"),
+        (timedelta(days=1, microseconds=1), "1d1us"),
+        (timedelta(days=-1, microseconds=-1), "-1d1us"),
+    ],
+)
+def test_timedelta_to_pl_duration(td: timedelta, expected: str) -> None:
+    out = _timedelta_to_pl_duration(td)
+    assert out == expected
 
 
 def test_estimated_size() -> None:
@@ -76,6 +100,21 @@ def test_estimated_size() -> None:
 
     with pytest.raises(ValueError):
         s.estimated_size("milkshake")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("v1", "v2"),
+    [
+        ("0.16.8", "0.16.7"),
+        ("23.0.0", (3, 1000)),
+        ((23, 0, 0), "3.1000"),
+        (("0", "0", "2beta"), "0.0.1"),
+        (("2", "5", "0", "1"), (2, 5, 0)),
+    ],
+)
+def test_parse_version(v1: Any, v2: Any) -> None:
+    assert parse_version(v1) > parse_version(v2)
+    assert parse_version(v2) < parse_version(v1)
 
 
 class Foo:

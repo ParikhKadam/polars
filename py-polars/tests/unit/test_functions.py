@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import typing
+from datetime import timedelta
+
 import numpy as np
 import pytest
 
@@ -91,38 +94,10 @@ def test_all_any_horizontally() -> None:
     assert_frame_equal(result, expected)
 
 
-def test_cut() -> None:
-    a = pl.Series("a", [v / 10 for v in range(-30, 30, 5)])
-    out = pl.cut(a, bins=[-1, 1])
-
-    assert out.shape == (12, 3)
-    assert out.filter(pl.col("break_point") < 1e9).to_dict(False) == {
-        "a": [-3.0, -2.5, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0],
-        "break_point": [-1.0, -1.0, -1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0],
-        "category": [
-            "(-inf, -1.0]",
-            "(-inf, -1.0]",
-            "(-inf, -1.0]",
-            "(-inf, -1.0]",
-            "(-inf, -1.0]",
-            "(-1.0, 1.0]",
-            "(-1.0, 1.0]",
-            "(-1.0, 1.0]",
-            "(-1.0, 1.0]",
-        ],
-    }
-
-    # test cut on integers #4939
-    inf = float("inf")
-    df = pl.DataFrame({"a": list(range(5))})
-    ser = df.select("a").to_series()
-    assert pl.cut(ser, bins=[-1, 1]).rows() == [
-        (0.0, 1.0, "(-1.0, 1.0]"),
-        (1.0, 1.0, "(-1.0, 1.0]"),
-        (2.0, inf, "(1.0, inf]"),
-        (3.0, inf, "(1.0, inf]"),
-        (4.0, inf, "(1.0, inf]"),
-    ]
+def test_cut_deprecated() -> None:
+    with pytest.deprecated_call():
+        a = pl.Series("a", [v / 10 for v in range(-30, 30, 5)])
+        pl.cut(a, bins=[-1, 1])
 
 
 def test_null_handling_correlation() -> None:
@@ -130,8 +105,8 @@ def test_null_handling_correlation() -> None:
 
     out = df.select(
         [
-            pl.pearson_corr("a", "b").alias("pearson"),
-            pl.spearman_rank_corr("a", "b").alias("spearman"),
+            pl.corr("a", "b").alias("pearson"),
+            pl.corr("a", "b", method="spearman").alias("spearman"),
         ]
     )
     assert out["pearson"][0] == pytest.approx(1.0)
@@ -141,9 +116,11 @@ def test_null_handling_correlation() -> None:
     df1 = pl.DataFrame({"a": [None, 1, 2], "b": [None, 2, 1]})
     df2 = pl.DataFrame({"a": [np.nan, 1, 2], "b": [np.nan, 2, 1]})
 
-    assert np.isclose(df1.select(pl.spearman_rank_corr("a", "b")).item(), -1.0)
+    assert np.isclose(df1.select(pl.corr("a", "b", method="spearman")).item(), -1.0)
     assert (
-        str(df2.select(pl.spearman_rank_corr("a", "b", propagate_nans=True)).item())
+        str(
+            df2.select(pl.corr("a", "b", method="spearman", propagate_nans=True)).item()
+        )
         == "nan"
     )
 
@@ -211,12 +188,12 @@ def test_align_frames() -> None:
             on="date",
         )
 
-    # reverse
+    # descending
     pf1, pf2 = pl.align_frames(
         pl.DataFrame([[3, 5, 6], [5, 8, 9]], orient="row"),
         pl.DataFrame([[2, 5, 6], [3, 8, 9], [4, 2, 0]], orient="row"),
         on="column_0",
-        reverse=True,
+        descending=True,
     )
     assert pf1.rows() == [(5, 8, 9), (4, None, None), (3, 5, 6), (2, None, None)]
     assert pf2.rows() == [(5, None, None), (4, 2, 0), (3, 8, 9), (2, 5, 6)]
@@ -245,17 +222,21 @@ def test_nan_aggregations() -> None:
 def test_coalesce() -> None:
     df = pl.DataFrame(
         {
-            "a": [None, None, None, None],
+            "a": [1, None, None, None],
             "b": [1, 2, None, None],
-            "c": [1, None, 3, None],
+            "c": [5, None, 3, None],
         }
     )
-    assert df.select(pl.coalesce(["a", "b", "c", 10])).to_dict(False) == {
-        "a": [1.0, 2.0, 3.0, 10.0]
-    }
-    assert df.select(pl.coalesce(pl.col(["a", "b", "c"]))).to_dict(False) == {
-        "a": [1.0, 2.0, 3.0, None]
-    }
+
+    # List inputs
+    expected = pl.Series("d", [1, 2, 3, 10]).to_frame()
+    result = df.select(pl.coalesce(["a", "b", "c", 10]).alias("d"))
+    assert_frame_equal(expected, result)
+
+    # Positional inputs
+    expected = pl.Series("d", [1.0, 2.0, 3.0, 10.0]).to_frame()
+    result = df.select(pl.coalesce(pl.col(["a", "b", "c"]), 10.0).alias("d"))
+    assert_frame_equal(result, expected)
 
 
 def test_ones_zeros() -> None:
@@ -285,3 +266,100 @@ def test_overflow_diff() -> None:
     assert df.select(pl.col("a").cast(pl.UInt64).diff()).to_dict(False) == {
         "a": [None, -10, 20]
     }
+
+
+@typing.no_type_check
+def test_fill_null_unknown_output_type() -> None:
+    df = pl.DataFrame(
+        {
+            "a": [
+                None,
+                2,
+                3,
+                4,
+                5,
+            ]
+        }
+    )
+    assert df.with_columns(
+        np.exp(pl.col("a")).fill_null(pl.lit(1, pl.Float64))
+    ).to_dict(False) == {
+        "a": [
+            1.0,
+            7.38905609893065,
+            20.085536923187668,
+            54.598150033144236,
+            148.4131591025766,
+        ]
+    }
+
+
+def test_repeat() -> None:
+    s = pl.select(pl.repeat(2**31 - 1, 3)).to_series()
+    assert s.dtype == pl.Int32
+    assert s.len() == 3
+    assert s.to_list() == [2**31 - 1] * 3
+    s = pl.select(pl.repeat(-(2**31), 4)).to_series()
+    assert s.dtype == pl.Int32
+    assert s.len() == 4
+    assert s.to_list() == [-(2**31)] * 4
+    s = pl.select(pl.repeat(2**31, 5)).to_series()
+    assert s.dtype == pl.Int64
+    assert s.len() == 5
+    assert s.to_list() == [2**31] * 5
+    s = pl.select(pl.repeat(-(2**31) - 1, 3)).to_series()
+    assert s.dtype == pl.Int64
+    assert s.len() == 3
+    assert s.to_list() == [-(2**31) - 1] * 3
+    s = pl.select(pl.repeat("foo", 2)).to_series()
+    assert s.dtype == pl.Utf8
+    assert s.len() == 2
+    assert s.to_list() == ["foo"] * 2
+    s = pl.select(pl.repeat(1.0, 5)).to_series()
+    assert s.dtype == pl.Float64
+    assert s.len() == 5
+    assert s.to_list() == [1.0] * 5
+    s = pl.select(pl.repeat(True, 4)).to_series()
+    assert s.dtype == pl.Boolean
+    assert s.len() == 4
+    assert s.to_list() == [True] * 4
+    s = pl.select(pl.repeat(None, 7)).to_series()
+    assert s.dtype == pl.Null
+    assert s.len() == 7
+    assert s.to_list() == [None] * 7
+    s = pl.select(pl.repeat(0, 0)).to_series()
+    assert s.dtype == pl.Int32
+    assert s.len() == 0
+
+
+def test_min() -> None:
+    s = pl.Series([1, 2, 3])
+    assert pl.min(s) == 1
+
+    df = pl.DataFrame({"a": [1, 4], "b": [3, 2]})
+    assert df.select(pl.min("a")).item() == 1
+
+    result = df.select(pl.min(["a", "b"]))
+    assert_frame_equal(result, pl.DataFrame({"min": [1, 2]}))
+
+    result = df.select(pl.min("a", 3))
+    assert_frame_equal(result, pl.DataFrame({"min": [1, 3]}))
+
+
+def test_max() -> None:
+    s = pl.Series([1, 2, 3])
+    assert pl.max(s) == 3
+
+    df = pl.DataFrame({"a": [1, 4], "b": [3, 2]})
+    assert df.select(pl.max("a")).item() == 4
+
+    result = df.select(pl.max(["a", "b"]))
+    assert_frame_equal(result, pl.DataFrame({"max": [3, 4]}))
+
+    result = df.select(pl.max("a", 3))
+    assert_frame_equal(result, pl.DataFrame({"max": [3, 4]}))
+
+
+def test_abs_logical_type() -> None:
+    s = pl.Series([timedelta(hours=1), timedelta(hours=-1)])
+    assert s.abs().to_list() == [timedelta(hours=1), timedelta(hours=1)]

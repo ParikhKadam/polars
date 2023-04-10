@@ -88,17 +88,16 @@ impl private::PrivateSeries for SeriesWrap<BinaryChunked> {
         IntoGroupsProxy::group_tuples(&self.0, multithreaded, sorted)
     }
 
-    #[cfg(feature = "sort_multiple")]
-    fn arg_sort_multiple(&self, by: &[Series], reverse: &[bool]) -> PolarsResult<IdxCa> {
-        self.0.arg_sort_multiple(by, reverse)
+    fn arg_sort_multiple(&self, by: &[Series], descending: &[bool]) -> PolarsResult<IdxCa> {
+        self.0.arg_sort_multiple(by, descending)
     }
 }
 
 impl SeriesTrait for SeriesWrap<BinaryChunked> {
     fn is_sorted_flag(&self) -> IsSorted {
-        if self.0.is_sorted_flag() {
+        if self.0.is_sorted_ascending_flag() {
             IsSorted::Ascending
-        } else if self.0.is_sorted_reverse_flag() {
+        } else if self.0.is_sorted_descending_flag() {
             IsSorted::Descending
         } else {
             IsSorted::Not
@@ -128,26 +127,16 @@ impl SeriesTrait for SeriesWrap<BinaryChunked> {
     }
 
     fn append(&mut self, other: &Series) -> PolarsResult<()> {
-        if self.0.dtype() == other.dtype() {
-            // todo! add object
-            self.0.append(other.as_ref().as_ref());
-            Ok(())
-        } else {
-            Err(PolarsError::SchemaMisMatch(
-                "cannot append Series; data types don't match".into(),
-            ))
-        }
+        polars_ensure!(self.0.dtype() == other.dtype(), append);
+        // todo! add object
+        self.0.append(other.as_ref().as_ref());
+        Ok(())
     }
 
     fn extend(&mut self, other: &Series) -> PolarsResult<()> {
-        if self.0.dtype() == other.dtype() {
-            self.0.extend(other.as_ref().as_ref());
-            Ok(())
-        } else {
-            Err(PolarsError::SchemaMisMatch(
-                "cannot extend Series; data types don't match".into(),
-            ))
-        }
+        polars_ensure!(self.0.dtype() == other.dtype(), extend);
+        self.0.extend(other.as_ref().as_ref());
+        Ok(())
     }
 
     fn filter(&self, filter: &BooleanChunked) -> PolarsResult<Series> {
@@ -194,7 +183,9 @@ impl SeriesTrait for SeriesWrap<BinaryChunked> {
 
         let mut out = ChunkTake::take_unchecked(&self.0, (&*idx).into());
 
-        if self.0.is_sorted_flag() && (idx.is_sorted_flag() || idx.is_sorted_reverse_flag()) {
+        if self.0.is_sorted_ascending_flag()
+            && (idx.is_sorted_ascending_flag() || idx.is_sorted_descending_flag())
+        {
             out.set_sorted_flag(idx.is_sorted_flag2())
         }
 

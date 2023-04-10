@@ -24,14 +24,14 @@ def test_apply_none() -> None:
         df.groupby("g", maintain_order=True).agg(
             pl.apply(
                 exprs=["a", pl.col("b") ** 4, pl.col("a") / 4],
-                f=lambda x: x[0] * x[1] + x[2].sum(),
+                function=lambda x: x[0] * x[1] + x[2].sum(),
             ).alias("multiple")
         )
     )["multiple"]
     assert out[0].to_list() == [4.75, 326.75, 82.75]
     assert out[1].to_list() == [238.75, 3418849.75, 372.75]
 
-    out_df = df.select(pl.map(exprs=["a", "b"], f=lambda s: s[0] * s[1]))
+    out_df = df.select(pl.map(exprs=["a", "b"], function=lambda s: s[0] * s[1]))
     assert out_df["a"].to_list() == (df["a"] * df["b"]).to_list()
 
     # check if we can return None
@@ -43,9 +43,9 @@ def test_apply_none() -> None:
 
     out = (
         df.groupby("g", maintain_order=True).agg(
-            pl.apply(exprs=["a", pl.col("b") ** 4, pl.col("a") / 4], f=func).alias(
-                "multiple"
-            )
+            pl.apply(
+                exprs=["a", pl.col("b") ** 4, pl.col("a") / 4], function=func
+            ).alias("multiple")
         )
     )["multiple"]
     assert out[1] is None
@@ -305,3 +305,15 @@ def test_apply_pass_name() -> None:
             pl.col("foo").apply(applyer, pass_name=True),
         ]
     ).to_dict(False) == {"bar": [1, 2], "foo": [["foo1"], ["foo1"]]}
+
+
+def test_apply_binary() -> None:
+    assert pl.DataFrame({"bin": [b"\x11" * 12, b"\x22" * 12, b"\xaa" * 12]}).select(
+        pl.col("bin").apply(bytes.hex)
+    ).to_dict(False) == {
+        "bin": [
+            "111111111111111111111111",
+            "222222222222222222222222",
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+        ]
+    }

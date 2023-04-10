@@ -1,4 +1,4 @@
-use std::fs::DirEntry;
+use std::path::Path;
 
 use polars_core::prelude::*;
 use polars_core::utils::_split_offsets;
@@ -8,12 +8,11 @@ use polars_io::SerReader;
 use polars_ops::prelude::*;
 use rayon::prelude::*;
 
-use crate::executors::sinks::sort::io::{block_thread_until_io_thread_done, DfIter, IOThread};
+use crate::executors::sinks::io::{block_thread_until_io_thread_done, DfIter, IOThread};
 use crate::executors::sinks::sort::source::SortSource;
 use crate::operators::FinalizedSink;
 
-pub(super) fn read_df(entry: &DirEntry) -> PolarsResult<DataFrame> {
-    let path = entry.path();
+pub(super) fn read_df(path: &Path) -> PolarsResult<DataFrame> {
     let file = std::fs::File::open(path)?;
     IpcReader::new(file).set_rechunk(false).finish()
 }
@@ -22,7 +21,7 @@ pub(super) fn sort_ooc(
     io_thread: &IOThread,
     partitions: Series,
     idx: usize,
-    reverse: bool,
+    descending: bool,
     slice: Option<(i64, usize)>,
 ) -> PolarsResult<FinalizedSink> {
     let partitions = partitions.to_physical_repr().into_owned();
@@ -39,10 +38,16 @@ pub(super) fn sort_ooc(
             let files = &files[*offset..*offset + *len];
 
             for entry in files {
-                let df = read_df(entry)?;
+                let path = entry.path();
+
+                // don't read the lock file
+                if path.ends_with(".lock") {
+                    continue;
+                }
+                let df = read_df(&path)?;
 
                 let sort_col = &df.get_columns()[idx];
-                let assigned_parts = det_partitions(sort_col, &partitions, reverse);
+                let assigned_parts = det_partitions(sort_col, &partitions, descending);
 
                 // partition the dataframe into proper buckets
                 let (iter, unique_assigned_parts) = partition_df(df, &assigned_parts)?;
@@ -71,14 +76,14 @@ pub(super) fn sort_ooc(
         })
         .collect::<std::io::Result<Vec<_>>>()?;
 
-    let source = SortSource::new(files, idx, reverse, slice, partitions);
+    let source = SortSource::new(files, idx, descending, slice);
     Ok(FinalizedSink::Source(Box::new(source)))
 }
 
-fn det_partitions(s: &Series, partitions: &Series, reverse: bool) -> IdxCa {
+fn det_partitions(s: &Series, partitions: &Series, descending: bool) -> IdxCa {
     let s = s.to_physical_repr();
 
-    search_sorted(partitions, &s, SearchSortedSide::Any, reverse).unwrap()
+    search_sorted(partitions, &s, SearchSortedSide::Any, descending).unwrap()
 }
 
 fn partition_df(df: DataFrame, partitions: &IdxCa) -> PolarsResult<(DfIter, IdxCa)> {

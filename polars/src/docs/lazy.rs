@@ -82,10 +82,10 @@
 //! // sort this DataFrame by multiple columns
 //!
 //! // ordering of the columns
-//! let reverse = vec![true, false];
+//! let descending = vec![true, false];
 //!
 //! let sorted = df.lazy()
-//!     .sort_by_exprs(vec![col("b"), col("a")], reverse, false)
+//!     .sort_by_exprs(vec![col("b"), col("a")], descending, false)
 //!     .collect()?;
 //!
 //! // sorted:
@@ -223,7 +223,7 @@
 //! // │ 1     ┆ "foo" ┆ "bar" ┆ "bar"      │
 //! // │ 2     ┆ "foo" ┆ "bar" ┆ "bar"      │
 //! // │ 3     ┆ "foo" ┆ "bar" ┆ "bar"      │
-//! // │ ...   ┆ ...   ┆ ...   ┆ ...        │
+//! // │ …     ┆ …     ┆ …     ┆ …          │
 //! // │ 5     ┆ "foo" ┆ "bar" ┆ "foo"      │
 //! // │ 6     ┆ "foo" ┆ "bar" ┆ "foo"      │
 //! // │ 7     ┆ "foo" ┆ "bar" ┆ "foo"      │

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import polars.internals as pli
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from polars.dataframe import DataFrame
+    from polars.series import Series
 
 
-def _to_rust_syntax(df: pli.DataFrame) -> str:
+def _to_rust_syntax(df: DataFrame) -> str:
     """Utility to generate the syntax that creates a polars 'DataFrame' in Rust."""
     syntax = "df![\n"
 
-    def format_s(s: pli.Series) -> str:
+    def format_s(s: Series) -> str:
         if s.null_count() == 0:
             return str(s.to_list()).replace("'", '"')
         else:

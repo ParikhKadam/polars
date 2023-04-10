@@ -62,18 +62,7 @@ impl ListNameSpace {
     /// Compute the sum the items in every sublist.
     pub fn sum(self) -> Expr {
         self.0
-            .map(
-                |s| Ok(Some(s.list()?.lst_sum())),
-                GetOutput::map_field(|f| {
-                    if let DataType::List(adt) = f.data_type() {
-                        Field::new(f.name(), *adt.clone())
-                    } else {
-                        // inner type
-                        f.clone()
-                    }
-                }),
-            )
-            .with_fmt("arr.sum")
+            .map_private(FunctionExpr::ListExpr(ListFunction::Sum))
     }
 
     /// Compute the mean of every sublist and return a `Series` of dtype `Float64`
@@ -116,27 +105,32 @@ impl ListNameSpace {
             .with_fmt("arr.unique")
     }
 
+    /// Keep only the unique values in every sublist.
+    pub fn unique_stable(self) -> Expr {
+        self.0
+            .map(
+                move |s| Ok(Some(s.list()?.lst_unique_stable()?.into_series())),
+                GetOutput::same_type(),
+            )
+            .with_fmt("arr.unique_stable")
+    }
+
     /// Get items in every sublist by index.
     pub fn get(self, index: Expr) -> Expr {
-        self.0.apply_many_private(
-            FunctionExpr::ListExpr(ListFunction::Get),
-            &[index],
-            false,
-            false,
-        )
+        self.0
+            .map_many_private(FunctionExpr::ListExpr(ListFunction::Get), &[index], false)
     }
 
     /// Get items in every sublist by multiple indexes.
     ///
     /// # Arguments
     /// - `null_on_oob`: Return a null when an index is out of bounds.
-    /// This behavior is more expensive than defaulting to returing an `Error`.
+    /// This behavior is more expensive than defaulting to returning an `Error`.
     #[cfg(feature = "list_take")]
     pub fn take(self, index: Expr, null_on_oob: bool) -> Expr {
-        self.0.apply_many_private(
+        self.0.map_many_private(
             FunctionExpr::ListExpr(ListFunction::Take(null_on_oob)),
             &[index],
-            false,
             false,
         )
     }
@@ -157,7 +151,7 @@ impl ListNameSpace {
     pub fn join(self, separator: &str) -> Expr {
         let separator = separator.to_string();
         self.0
-            .apply(
+            .map(
                 move |s| {
                     s.list()?
                         .lst_join(&separator)
@@ -211,10 +205,9 @@ impl ListNameSpace {
 
     /// Slice every sublist.
     pub fn slice(self, offset: Expr, length: Expr) -> Expr {
-        self.0.apply_many_private(
+        self.0.map_many_private(
             FunctionExpr::ListExpr(ListFunction::Slice),
             &[offset, length],
-            false,
             false,
         )
     }
@@ -297,7 +290,21 @@ impl ListNameSpace {
                 collect_groups: ApplyOptions::ApplyFlat,
                 input_wildcard_expansion: true,
                 auto_explode: true,
-                fmt_str: "arr.contains",
+                ..Default::default()
+            },
+        }
+    }
+    #[cfg(feature = "list_count")]
+    pub fn count_match<E: Into<Expr>>(self, other: E) -> Expr {
+        let other = other.into();
+
+        Expr::Function {
+            input: vec![self.0, other],
+            function: FunctionExpr::ListExpr(ListFunction::CountMatch),
+            options: FunctionOptions {
+                collect_groups: ApplyOptions::ApplyFlat,
+                input_wildcard_expansion: true,
+                auto_explode: true,
                 ..Default::default()
             },
         }
